@@ -1,0 +1,161 @@
+#!/bin/bash
+SCRIPT_NAME=$(basename "$0")
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+
+########################################################################################################################
+# DEFAULT SETTINGS
+########################################################################################################################
+DEFAULT_CECPCTV_SERVER="pi@pimon"
+DEFAULT_CECPCTV_BIN="~/cecpctv/cecpctv"
+DEFAULT_LOGDIR="$SCRIPT_DIR/log"
+DEFAULT_LOGFILE="$DEFAULT_LOGDIR/$SCRIPT_NAME.log"
+
+if [ ! -d "$DEFAULT_LOGDIR" ]; then
+    mkdir -p "$DEFAULT_LOGDIR"
+fi
+
+########################################################################################################################
+# VARIABLES
+########################################################################################################################
+CECPCTV_SERVER=$DEFAULT_CECPCTV_SERVER
+CECPCTV_BIN=$DEFAULT_CECPCTV_BIN
+LOGFILE=$DEFAULT_LOGFILE
+
+########################################################################################################################
+# HELP
+########################################################################################################################
+show_help() {
+    local command="$1"
+    echo "usage: $SCRIPT_NAME (command ...) {arguments ...}"
+    echo ""
+    echo "commands:"
+    echo "  watch        watches for tv status and takes action on change"
+    echo "  on           turn on the tv"
+    echo "  standby      sent tv into standby mode"
+    echo ""
+    echo "optional arguments:"
+    echo "  --cecpctv-server    server running cecpctv service: default $DEFAULT_CECPCTV_SERVER"
+    echo "  --cecpctv-bin       binary location on the server running cecpctv: default $DEFAULT_CECPCTV_BIN"
+}
+
+########################################################################################################################
+# LOGING
+########################################################################################################################
+log() {
+    local message="$1"
+    local timestamp=$(date "+%y-%m-%d %H:%M:%S")
+    echo "[$timestamp] $message" >>$LOGFILE
+}
+
+########################################################################################################################
+# TV FUNCTIONS
+########################################################################################################################
+tv_status() {
+    local status="$(xset q | grep "Monitor is" | cut -c14-)"
+    case "$status" in
+    "On") echo "on" ;;
+    "Off") echo "off" ;;
+    "in Standby") echo "standby" ;;
+    esac
+}
+
+tv_send() {
+    local action="$1"
+    ssh "${CECPCTV_SERVER}" "${CECPCTV_BIN} $action"
+}
+
+########################################################################################################################
+# FUNCTIONS
+########################################################################################################################
+get_dpms_status() {
+    echo $(xset q | grep "DPMS is" | cut -c11-)
+}
+
+watch() {
+    local previous_status="$(tv_status)"
+    local current_status=""
+    while [ 1 ]; do
+        current_status="$(tv_status)"
+        if [ ! -z "$current_status" ] && [ "$current_status" != "$previous_status" ]; then
+            if [ "$current_status" == "on" ] || [ "$current_status" == "off" ] || [ "$current_status" == "standby" ]; then
+                log "send command $current_status"
+                tv_send "$current_status"
+            fi
+            previous_status="$current_status"
+        fi
+        sleep 1
+    done
+}
+
+
+########################################################################################################################
+# CHECK DEPENDENCIES
+########################################################################################################################
+dpms_status=$(get_dpms_status)
+if [ -z "$dpms_status" ] || [ "$dpms_status" != "Enabled" ]; then
+    echo "DPMS is not enabled, watch not possible!"
+    exit 1
+fi
+
+########################################################################################################################
+# ssh-keygen -t ed25519
+# ssh-keygen -t rsa -b 4096 -f ./id_rsa
+# ssh-copy-id pi@pimon
+# /usr/bin/sleep 0.5 && /usr/bin/xset dpms force off
+#
+# ssh pi@pimon /home/pi/gpio/tvmon standby
+########################################################################################################################
+
+########################################################################################################################
+# ARGUMENTS HANDLING
+########################################################################################################################
+PARAMS=""
+CURRENT_COMMAND=$1
+while (("$#")); do
+    [[ $1 == --*=* ]] && set -- "${1%%=*}" "${1#*=}" "${@:2}"
+    case "$i" in
+    --cecpctv-server)
+        CECPCTV_SERVER="$2"
+        shift 2
+        ;;
+    --cecpctv-bin)
+        CECPCTV_BIN="$2"
+        shift 2
+        ;;
+    -h | --help)
+        show_help $CURRENT_COMMAND
+        exit 0
+        ;;
+    --) # end argument parsing
+        shift
+        break
+        ;;
+    *) # preserve positional arguments
+        PARAMS="$PARAMS \"$1\""
+        shift
+        ;;
+    esac
+done
+# set positional arguments in their proper place
+eval set -- "$PARAMS"
+
+########################################################################################################################
+# main routine
+########################################################################################################################
+case "$CURRENT_COMMAND" in
+service)
+    service "$2"
+    ;;
+watch)
+    watch
+    ;;
+on|off|standby)
+    tv_send "$CURRENT_COMMAND"
+    log "manual command: $CURRENT_COMMAND"
+    ;;
+*)
+    show_help $CURRENT_COMMAND
+    ;;
+esac
+
+exit 0

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=cecpctv-client
+Icon=/var/www/cecpctv/cecpctv-client.png
+Exec=/var/www/cecpctv/cecpctv-client watch
+Terminal=false
+Type=Application
+X-GNOME-Autostart-enabled=true

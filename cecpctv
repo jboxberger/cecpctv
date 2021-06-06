@@ -8,7 +8,12 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 DEFAULT_DEVICE_ADDRESS=0
 DEFAULT_GPIO_HEADER=3
 DEFAULT_GPIO_PATH=/sys/class/gpio
-DEFAULT_LOGFILE=/var/log/$SCRIPT_NAME
+DEFAULT_LOGDIR="$SCRIPT_DIR/log"
+DEFAULT_LOGFILE="$DEFAULT_LOGDIR/$SCRIPT_NAME.log"
+
+if [ ! -d "$DEFAULT_LOGDIR" ]; then
+    mkdir -p "$DEFAULT_LOGDIR"
+fi
 
 ########################################################################################################################
 # VARIABLES
@@ -32,8 +37,8 @@ show_help() {
     echo "  standby      sent tv into standby mode"
     echo ""
     echo "optional arguments:"
-    echo "  --device            device/tv address, see $SCRIPT_NAME list, default: 0"
-    echo "  --gpio              gpio header number: default 3"
+    echo "  --device            device/tv address, see $SCRIPT_NAME list, default: $DEFAULT_DEVICE_ADDRESS"
+    echo "  --gpio              gpio header number: default $DEFAULT_GPIO_HEADER"
 }
 
 ########################################################################################################################
@@ -147,7 +152,7 @@ tv_status() {
 }
 
 ########################################################################################################################
-# HELPER FUNCTIONS
+# SERVICE FUNCTIONS
 ########################################################################################################################
 service() {
     local action="$1"
@@ -168,7 +173,6 @@ service() {
         local working_dir_escaped=$(echo "$SCRIPT_DIR" | sed 's/\//\\\//g')
         local executable_escaped=$(echo "$SCRIPT_DIR/$SCRIPT_NAME" | sed 's/\//\\\//g')
         cp "$SCRIPT_DIR/$SCRIPT_NAME.service.tpl" "$service_file"
-        sudo touch "$DEFAULT_LOGFILE" && sudo chown $USER: "$DEFAULT_LOGFILE"
         sed -i -e "s/{EXECUTABLE}/$executable_escaped/g" "$service_file"
         sed -i -e "s/{WORKING_DIR}/$working_dir_escaped/g" "$service_file"
         sed -i -e "s/{USER}/$USER/g" "$service_file"
@@ -181,19 +185,21 @@ service() {
             if [ -L "$systemd_file" ]; then sudo rm "$systemd_file"; fi
         fi
         if [ -f "$service_file" ]; then rm "$service_file"; fi
-        if [ -f "$DEFAULT_LOGFILE" ]; then sudo rm "$DEFAULT_LOGFILE"; fi
         ;;
     start | stop | restart | status | enable | disable)
         sudo systemctl "$action" "$service_name"
         ;;
 
     *) # all other
-        echo "unlnown command: $action"
+        echo "unknown command: $action"
         ;;
     esac
     return 0
 }
 
+########################################################################################################################
+# WATCH FUNCTIONS
+########################################################################################################################
 watch() {
     local DEVICE_ADDRESS="$1"
     local GPIO_HEADER="$2"
@@ -274,7 +280,7 @@ on)
     tv_on ${DEVICE_ADDRESS}
     log "manual command: $CURRENT_COMMAND"
     ;;
-standby)
+off|standby)
     tv_standby ${DEVICE_ADDRESS}
     log "manual command: $CURRENT_COMMAND"
     ;;
