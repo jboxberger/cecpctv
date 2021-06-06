@@ -1,0 +1,286 @@
+#!/bin/bash
+SCRIPT_NAME=$(basename "$0")
+########################################################################################################################
+# DEFAULT SETTINGS
+########################################################################################################################
+DEFAULT_DEVICE_ADDRESS=0
+DEFAULT_GPIO_HEADER=3
+DEFAULT_GPIO_PATH=/sys/class/gpio
+DEFAULT_LOGFILE=/var/log/$SCRIPT_NAME
+
+########################################################################################################################
+# VARIABLES
+########################################################################################################################
+DEVICE_ADDRESS=$DEFAULT_DEVICE_ADDRESS
+GPIO_HEADER=$DEFAULT_GPIO_HEADER
+LOGFILE=$DEFAULT_LOGFILE
+
+########################################################################################################################
+# HELP
+########################################################################################################################
+show_help() {
+    local command="$1"
+    echo "usage: $SCRIPT_NAME (command ...) {arguments ...}"
+    echo ""
+    echo "commands:"
+    echo "  service      install|uninstall|start|stop|restart|status|enable|disable"
+    echo "  watch        watches for gipio status and send commands to tv on status change"
+    echo "  list         list watchable devices/tv"
+    echo "  on           turn on the tv"
+    echo "  standby      sent tv into standby mode"
+    echo ""
+    echo "optional arguments:"
+    echo "  --device            device/tv address, see $SCRIPT_NAME list, default: 0"
+    echo "  --gpio              gpio header number: default 3"
+}
+
+########################################################################################################################
+# LOGING
+########################################################################################################################
+log() {
+    local message="$1"
+    local timestamp=$(date "+%y-%m-%d %H:%M:%S")
+    echo "[$timestamp] $message" >> $LOGFILE
+}
+
+########################################################################################################################
+# TRAP
+# Exit routine fired on application end to unregister the gpio header
+########################################################################################################################
+finish() {
+  if [ $(gpio_pin_is_enabled ${GPIO_HEADER}) -eq "1" ] && [ $(gpio_pin_disable ${GPIO_HEADER}) -eq "1" ]; then
+    log "gpio header ${GPIO_HEADER} unregister... ok"
+  else
+    log "gpio header ${GPIO_HEADER} unregister... failed"
+  fi
+}
+
+########################################################################################################################
+# GPIO FUNCTIONS
+########################################################################################################################
+gpio_pin_is_enabled() {
+  local header_number="${1}"
+  if [ -e $DEFAULT_GPIO_PATH/gpio${header_number} ]; then
+    echo "1"
+    return 0
+  else
+    echo "0"
+    return 1
+  fi
+}
+
+gpio_pin_enable() {
+  local header_number="${1}"
+  if [ $(gpio_pin_is_enabled ${header_number}) -eq "0" ]; then
+    echo "${header_number}" > $DEFAULT_GPIO_PATH/export
+    if [ $(gpio_pin_is_enabled ${header_number}) -eq "0" ]; then
+      echo "0"
+      return 1
+    fi
+  fi
+  echo "1"
+  return 0
+}
+
+gpio_pin_disable() {
+  local header_number="${1}"
+  if [ $(gpio_pin_is_enabled ${header_number}) -eq "1" ]; then
+    echo "${header_number}" > $DEFAULT_GPIO_PATH/unexport
+    if [ $(gpio_pin_is_enabled ${header_number}) -eq "1" ]; then
+      echo "0"
+      return 1
+    fi
+  fi
+  echo "1"
+  return 0
+}
+
+gpio_pin_get_value() {
+  local header_number="${1}"
+  if [ $(gpio_pin_is_enabled ${header_number}) -eq "1" ]; then
+    echo $(cat $DEFAULT_GPIO_PATH/gpio${header_number}/value)
+    return 0
+  fi
+
+  echo "-1"
+  return 1
+}
+
+gpio_pin_init() {
+  local header_number="${1}"
+  if [ $(gpio_pin_is_enabled ${header_number}) -eq "0" ]; then
+    if [ $(gpio_pin_enable $header_number) -eq "1" ]; then
+      log "gpio header ${header_number} register... ok"
+      trap finish EXIT
+    else
+      log "gpio header ${header_number} register... failed"
+      exit 1
+    fi
+  fi
+}
+
+gpio_button_is_pressed() {
+  local header_number="${1}"
+  if [ $(gpio_pin_is_enabled ${header_number}) -eq "1" ]; then
+    if [ $(gpio_pin_get_value ${header_number}) -eq "0" ]; then echo "1";  else echo "0"; fi
+    return 0
+  fi
+  echo "-1"
+  return 1
+}
+
+########################################################################################################################
+# TV ACTIONS
+########################################################################################################################
+tv_on() {
+  echo "on ${1}" | cec-client -s -d 1
+}
+
+tv_standby() {
+  echo "standby ${1}" | cec-client -s -d 1
+}
+
+tv_status() {
+  echo $(echo "pow ${1}" | cec-client -s -d 1 | grep 'power status' | cut -c15- | tr -d '\n')
+}
+
+########################################################################################################################
+# HELPER FUNCTIONS
+########################################################################################################################
+service() {
+    local action="$1"
+    local current_dir=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
+
+    local service_dir="$current_dir/service"
+    local service_name="$SCRIPT_NAME.service"
+    local service_file="$service_dir/$service_name"
+    local systemd_file="/etc/systemd/system/$service_name"
+
+    if [ ! -d "$service_dir" ]; then mkdir -p "$service_dir"; fi
+    case "$action" in
+        install)
+            # uninstall first
+            if [ -f "$service_file" ]; then rm "$service_file"; fi
+            if [ -L "$systemd_file" ]; then sudo rm "$systemd_file"; fi
+
+            # now install
+            local working_dir_escaped=$(echo "$current_dir" | sed 's/\//\\\//g')
+            local executable_escaped=$(echo "$current_dir/$SCRIPT_NAME" | sed 's/\//\\\//g')
+            cp "./$SCRIPT_NAME.service.tpl" "$service_file"
+            sudo touch "$DEFAULT_LOGFILE" && sudo chown $USER: "$DEFAULT_LOGFILE"
+            sed -i -e "s/{EXECUTABLE}/$executable_escaped/g" "$service_file"
+            sed -i -e "s/{WORKING_DIR}/$working_dir_escaped/g" "$service_file"
+            sed -i -e "s/{USER}/$USER/g" "$service_file"
+            sudo ln -s "$service_file" "$systemd_file"
+        ;;
+        uninstall)
+            if [ -L "$systemd_file" ]; then
+                sudo systemctl "stop" "$service_name"
+                sudo systemctl "disable" "$service_name"
+                if [ -L "$systemd_file" ]; then sudo rm "$systemd_file"; fi
+            fi
+            if [ -f "$service_file" ]; then rm "$service_file"; fi
+            if [ -f "$DEFAULT_LOGFILE" ]; then sudo rm "$DEFAULT_LOGFILE"; fi
+        ;;
+        start|stop|restart|status|enable|disable)
+            sudo systemctl "$action" "$service_name"
+        ;;
+
+        *) # all other
+            echo "unlnown command: $action"
+        ;;
+    esac
+    return 0
+}
+
+watch() {
+  local DEVICE_ADDRESS="$1"
+  local GPIO_HEADER="$2"
+
+  local previous_button_status=$(gpio_button_is_pressed $GPIO_HEADER)
+  local current_button_status=""
+  local device_status=""
+
+  while [ 1 ]
+  do
+    current_button_status=$(gpio_button_is_pressed $GPIO_HEADER)
+    if [ $current_button_status != $previous_button_status ]; then
+
+      device_status=$(tv_status "$DEVICE_ADDRESS")
+
+      if [ "$current_button_status" -eq "0" ] && [ "$device_status" == "on" ]; then
+        log "Button on $GPIO_HEADER released, going standby"
+        tv_standby ${DEVICE_ADDRESS}
+      elif [ "$current_button_status" -eq "1" ] && [ "$device_status" == "standby" ]; then
+        log "Button on $GPIO_HEADER pressed, waking up"
+        tv_on ${DEVICE_ADDRESS}
+      fi
+
+      previous_button_status=$current_button_status
+
+    fi
+    sleep 1
+  done
+}
+
+########################################################################################################################
+# ARGUMENTS HANDLING
+########################################################################################################################
+PARAMS=""
+CURRENT_COMMAND=$1
+while (( "$#" )); do
+    [[ $1 == --*=* ]] && set -- "${1%%=*}" "${1#*=}" "${@:2}"
+    case "$i" in
+    --device)
+        DEVICE_ADDRESS="$2"
+        shift 2
+    ;;
+    --gpio)
+        GPIO_HEADER="$2"
+        shift 2
+    ;;
+    -h|--help)
+        show_help $CURRENT_COMMAND
+        exit 0
+    ;;
+    --) # end argument parsing
+        shift
+        break
+    ;;
+    *) # preserve positional arguments
+        PARAMS="$PARAMS \"$1\""
+        shift
+    ;;
+    esac
+done
+# set positional arguments in their proper place
+eval set -- "$PARAMS"
+
+########################################################################################################################
+# main routine
+########################################################################################################################
+case "$CURRENT_COMMAND" in
+  service)
+    service "$2"
+  ;;
+  watch)
+    gpio_pin_init "$GPIO_HEADER"
+    watch "$DEVICE_ADDRESS" "$GPIO_HEADER"
+  ;;
+  list)
+    echo 'scan' | cec-client -s -d 1
+  ;;
+  on)
+    tv_on ${DEVICE_ADDRESS}
+    log "manual command: $CURRENT_COMMAND"
+  ;;
+  standby)
+    tv_standby ${DEVICE_ADDRESS}
+    log "manual command: $CURRENT_COMMAND"
+  ;;
+  *)
+    show_help $CURRENT_COMMAND
+    ;;
+esac
+
+exit 0
