@@ -1,6 +1,6 @@
 #!/bin/bash
 SCRIPT_NAME=$(basename "$0")
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 ########################################################################################################################
 # DEFAULT SETTINGS
@@ -157,12 +157,10 @@ tv_status() {
 service() {
     local action="$1"
 
-    local service_dir="$SCRIPT_DIR/service"
     local service_name="$SCRIPT_NAME.service"
-    local service_file="$service_dir/$service_name"
+    local service_file="$SCRIPT_DIR/$service_name"
     local systemd_file="/etc/systemd/system/$service_name"
 
-    if [ ! -d "$service_dir" ]; then mkdir -p "$service_dir"; fi
     case "$action" in
     install)
         # uninstall first
@@ -280,7 +278,7 @@ on)
     tv_on ${DEVICE_ADDRESS}
     log "manual command: $CURRENT_COMMAND"
     ;;
-off|standby)
+off | standby)
     tv_standby ${DEVICE_ADDRESS}
     log "manual command: $CURRENT_COMMAND"
     ;;
